@@ -732,7 +732,7 @@ def debug_travel():
     except Exception as e:
         result["distancematrix_transit"] = {"error": str(e)}
 
-    # Directions API (transit)
+    # Directions API (transit) - 横浜→八景島
     try:
         r = requests.get("https://maps.googleapis.com/maps/api/directions/json",
                          params={"origin": origin, "destination": dest, "mode": "transit",
@@ -740,11 +740,26 @@ def debug_travel():
         d = r.json(); routes = d.get("routes", [])
         if routes:
             leg = routes[0].get("legs", [{}])[0]
-            result["directions_transit"] = {"status": d.get("status"), "duration": leg.get("duration",{}).get("text")}
+            result["directions_transit_yokohama"] = {"status": d.get("status"), "duration": leg.get("duration",{}).get("text")}
         else:
-            result["directions_transit"] = {"status": d.get("status"), "routes": 0}
+            result["directions_transit_yokohama"] = {"status": d.get("status"), "routes": 0}
     except Exception as e:
-        result["directions_transit"] = {"error": str(e)}
+        result["directions_transit_yokohama"] = {"error": str(e)}
+
+    # Directions API (transit) - 渋谷駅→新宿駅（確実に電車が走るルート）
+    try:
+        r = requests.get("https://maps.googleapis.com/maps/api/directions/json",
+                         params={"origin": "渋谷駅,東京都", "destination": "新宿駅,東京都",
+                                 "mode": "transit", "departure_time": now_ts,
+                                 "language": "ja", "key": GOOGLE_KEY}, timeout=10)
+        d = r.json(); routes = d.get("routes", [])
+        if routes:
+            leg = routes[0].get("legs", [{}])[0]
+            result["directions_transit_tokyo"] = {"status": d.get("status"), "duration": leg.get("duration",{}).get("text")}
+        else:
+            result["directions_transit_tokyo"] = {"status": d.get("status"), "routes": 0, "error_message": d.get("error_message","")}
+    except Exception as e:
+        result["directions_transit_tokyo"] = {"error": str(e)}
 
     return jsonify(result)
 
