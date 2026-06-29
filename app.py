@@ -746,11 +746,11 @@ def debug_travel():
     except Exception as e:
         result["directions_transit_yokohama"] = {"error": str(e)}
 
-    # Directions API (transit) - 渋谷駅→新宿駅（確実に電車が走るルート）
+    # Directions API (transit) - 渋谷駅→新宿駅
     try:
         r = requests.get("https://maps.googleapis.com/maps/api/directions/json",
                          params={"origin": "渋谷駅,東京都", "destination": "新宿駅,東京都",
-                                 "mode": "transit", "departure_time": now_ts,
+                                 "mode": "transit", "departure_time": now_ts + 1800,
                                  "language": "ja", "key": GOOGLE_KEY}, timeout=10)
         d = r.json(); routes = d.get("routes", [])
         if routes:
@@ -760,6 +760,29 @@ def debug_travel():
             result["directions_transit_tokyo"] = {"status": d.get("status"), "routes": 0, "error_message": d.get("error_message","")}
     except Exception as e:
         result["directions_transit_tokyo"] = {"error": str(e)}
+
+    # Routes API (新しいAPI) - 渋谷→新宿
+    try:
+        import datetime as _dt
+        dep_rfc = (_dt.datetime.utcnow() + _dt.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rr = requests.post(
+            "https://routes.googleapis.com/directions/v2:computeRoutes",
+            headers={"X-Goog-Api-Key": GOOGLE_KEY,
+                     "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.legs"},
+            json={"origin":      {"address": "渋谷駅,東京都,日本"},
+                  "destination": {"address": "新宿駅,東京都,日本"},
+                  "travelMode":  "TRANSIT",
+                  "departureTime": dep_rfc},
+            timeout=10)
+        rd = rr.json()
+        routes2 = rd.get("routes", [])
+        if routes2:
+            dur = routes2[0].get("duration", "")
+            result["routes_api_transit_tokyo"] = {"duration": dur, "status": "OK"}
+        else:
+            result["routes_api_transit_tokyo"] = {"status": "NO_ROUTES", "response": rd}
+    except Exception as e:
+        result["routes_api_transit_tokyo"] = {"error": str(e)}
 
     return jsonify(result)
 
