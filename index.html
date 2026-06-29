@@ -173,6 +173,17 @@ body{font-family:'Hiragino Kaku Gothic Pro','Yu Gothic',sans-serif;background:va
       <button class="mood-chip" data-mood="室内遊び場"   onclick="togMood(this)"><span class="ico">🏠</span>室内遊び場</button>
     </div>
 
+    <!-- セットアップ用AIチャット -->
+    <div class="chat-section" style="margin-top:16px;">
+      <h3>💬 AIに相談する</h3>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:12px;">「今日の天気に合う場所は？」「小学生向けのおすすめは？」など検索前に聞いてみてください</p>
+      <div class="chat-messages" id="setup-chat-messages" style="max-height:200px;"></div>
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="setup-chat-input" rows="2" placeholder="何でも聞いてください..." onkeydown="setupChatKeydown(event)"></textarea>
+        <button class="btn-send" id="setup-btn-send" onclick="sendSetupChat()">➤</button>
+      </div>
+    </div>
+
     <div id="error-msg" class="error-box hidden"></div>
     <button class="btn-search" id="btn-search" onclick="doSearch()" disabled>
       <span>🔍</span><span>スポットを探す</span>
@@ -217,6 +228,7 @@ let maxTravelMin = 90;
 let moods = [];
 let lastResult = null;
 let chatHistory = [];
+let setupChatHistory = [];
 
 // ===== INIT =====
 window.onload = () => {
@@ -441,6 +453,59 @@ async function sendChat() {
 
 function addChatMsg(role, text) {
   const wrap = document.getElementById('chat-messages');
+  const el = document.createElement('div');
+  el.className = `chat-msg ${role}`;
+  el.textContent = text;
+  wrap.appendChild(el);
+  wrap.scrollTop = wrap.scrollHeight;
+  return el;
+}
+
+// ===== SETUP CHAT =====
+function setupChatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSetupChat(); }
+}
+
+async function sendSetupChat() {
+  const input = document.getElementById('setup-chat-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  document.getElementById('setup-btn-send').disabled = true;
+  addSetupChatMsg('user', msg);
+  setupChatHistory.push({ role: 'user', content: msg });
+
+  const typingEl = addSetupChatMsg('ai', '...');
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: msg,
+        history: setupChatHistory.slice(-8),
+        context: {
+          spots: [],
+          weather: null,
+          location_name: document.getElementById('loc-text').textContent,
+          transport: transport,
+          moods: moods,
+        },
+      }),
+    });
+    const data = await res.json();
+    const reply = data.reply || data.error || 'エラーが発生しました';
+    typingEl.textContent = reply;
+    setupChatHistory.push({ role: 'assistant', content: reply });
+  } catch(e) {
+    typingEl.textContent = 'エラーが発生しました: ' + e.message;
+  }
+  document.getElementById('setup-btn-send').disabled = false;
+  input.focus();
+}
+
+function addSetupChatMsg(role, text) {
+  const wrap = document.getElementById('setup-chat-messages');
   const el = document.createElement('div');
   el.className = `chat-msg ${role}`;
   el.textContent = text;
