@@ -247,7 +247,7 @@ function getLocation() {
       el.className = 'loc-text err';
       document.getElementById('manual-loc-area').style.display = 'block';
     },
-    { enableHighAccuracy: true, timeout: 12000 }
+    { enableHighAccuracy: false, timeout: 8000 }
   );
 }
 
