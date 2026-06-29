@@ -4,7 +4,7 @@ Google Places API + Open-Meteo (無料) + Claude AI
 Config: outing_config.json (APIキーはチャットに貼らない)
 """
 
-import json, os, math, requests, anthropic
+import json, os, math, requests, anthropic, time as _time_module
 from flask import Flask, request, jsonify, send_from_directory
 from datetime import datetime, timezone, timedelta
 
@@ -57,6 +57,12 @@ TRANSPORT_LABELS = {
 }
 
 # ---------------------------------------------------------------------------
+# 天気キャッシュ (Open-Meteo レートリミット対策)
+# ---------------------------------------------------------------------------
+_weather_cache: dict = {}   # (lat2, lng2) -> (timestamp, data)
+WEATHER_CACHE_TTL = 600     # 10分間キャッシュ
+
+# ---------------------------------------------------------------------------
 # 天気取得 (Open-Meteo — APIキー不要)
 # ---------------------------------------------------------------------------
 WMO_CODES = {
@@ -72,6 +78,13 @@ WMO_CODES = {
 }
 
 def get_weather(lat: float, lng: float) -> dict:
+    cache_key = (round(lat, 2), round(lng, 2))
+    now = _time_module.time()
+    if cache_key in _weather_cache:
+        ts, cached = _weather_cache[cache_key]
+        if now - ts < WEATHER_CACHE_TTL:
+            return cached
+
     try:
         params = {
             "latitude":  lat,
@@ -91,7 +104,7 @@ def get_weather(lat: float, lng: float) -> dict:
                     "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
                     "error": "currentフィールドなし"}
         code = cur.get("weather_code", 0)
-        return {
+        result = {
             "temp":        round(cur.get("temperature_2m", 20), 1),
             "feels_like":  round(cur.get("apparent_temperature", 20), 1),
             "condition":   WMO_CODES.get(code, f"コード{code}"),
@@ -101,6 +114,8 @@ def get_weather(lat: float, lng: float) -> dict:
             "is_rainy":    code in (51,53,55,61,63,65,80,81,82,95,96,99),
             "is_snowy":    code in (71,73,75,77,85,86),
         }
+        _weather_cache[cache_key] = (now, result)
+        return result
     except requests.exceptions.Timeout:
         print(f"[WARN] 天気取得タイムアウト (lat={lat}, lng={lng})")
         return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
