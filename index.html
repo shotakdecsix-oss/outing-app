@@ -297,10 +297,15 @@ async function useManualLocation() {
 // ===== WEATHER =====
 async function fetchWeather() {
   if (!lat || !lng) return;
+  const bar = document.getElementById('weather-bar');
+  bar.innerHTML = '🌤️ 天気を取得中...';
   try {
     const r = await fetch(`/api/weather?lat=${lat}&lng=${lng}`);
     const w = await r.json();
-    const bar = document.getElementById('weather-bar');
+    if (w.error) {
+      bar.innerHTML = `⚠️ 天気取得失敗（${w.error}）<button onclick="fetchWeather()" style="margin-left:8px;font-size:11px;padding:2px 8px;border:1px solid #fff;border-radius:6px;cursor:pointer;background:rgba(255,255,255,0.2);color:#fff;">再取得</button>`;
+      return;
+    }
     const rainIcon = w.is_rainy ? '☔' : (w.code <= 2 ? '☀️' : '⛅');
     bar.innerHTML = `
       <span>${rainIcon} ${w.condition}</span>
@@ -310,6 +315,7 @@ async function fetchWeather() {
     `;
   } catch (e) {
     console.warn('天気取得失敗:', e);
+    bar.innerHTML = `⚠️ 天気取得失敗 <button onclick="fetchWeather()" style="margin-left:8px;font-size:11px;padding:2px 8px;border:1px solid #fff;border-radius:6px;cursor:pointer;background:rgba(255,255,255,0.2);color:#fff;">再取得</button>`;
   }
 }
 

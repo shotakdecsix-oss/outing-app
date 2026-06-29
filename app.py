@@ -73,30 +73,44 @@ WMO_CODES = {
 
 def get_weather(lat: float, lng: float) -> dict:
     try:
-        url = (
-            f"https://api.open-meteo.com/v1/forecast"
-            f"?latitude={lat}&longitude={lng}"
-            f"&current=temperature_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation"
-            f"&timezone=Asia%2FTokyo&forecast_days=1"
-        )
-        r = requests.get(url, timeout=8)
+        params = {
+            "latitude":  lat,
+            "longitude": lng,
+            "current":   "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation",
+            "timezone":  "Asia/Tokyo",
+            "forecast_days": 1,
+        }
+        r = requests.get("https://api.open-meteo.com/v1/forecast",
+                         params=params, timeout=10)
         r.raise_for_status()
-        cur = r.json().get("current", {})
+        data = r.json()
+        cur = data.get("current", {})
+        if not cur:
+            print(f"[WARN] 天気API: currentフィールドなし。レスポンス: {data}")
+            return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
+                    "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
+                    "error": "currentフィールドなし"}
         code = cur.get("weather_code", 0)
         return {
             "temp":        round(cur.get("temperature_2m", 20), 1),
             "feels_like":  round(cur.get("apparent_temperature", 20), 1),
-            "condition":   WMO_CODES.get(code, "不明"),
+            "condition":   WMO_CODES.get(code, f"コード{code}"),
             "wind":        round(cur.get("wind_speed_10m", 0), 1),
             "precip":      round(cur.get("precipitation", 0), 1),
             "code":        code,
             "is_rainy":    code in (51,53,55,61,63,65,80,81,82,95,96,99),
             "is_snowy":    code in (71,73,75,77,85,86),
         }
+    except requests.exceptions.Timeout:
+        print(f"[WARN] 天気取得タイムアウト (lat={lat}, lng={lng})")
+        return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
+                "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
+                "error": "timeout"}
     except Exception as e:
-        print(f"[WARN] 天気取得失敗: {e}")
-        return {"temp": 20, "feels_like": 20, "condition": "不明", "wind": 0,
-                "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False}
+        print(f"[WARN] 天気取得失敗: {type(e).__name__}: {e}")
+        return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
+                "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
+                "error": str(e)}
 
 # ---------------------------------------------------------------------------
 # 逆ジオコーディング (Google Geocoding — 同じAPIキーで可)
