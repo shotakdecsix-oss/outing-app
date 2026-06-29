@@ -479,12 +479,70 @@ def spots_endpoint():
         "generated_at":  datetime.now(JST).strftime("%Y-%m-%d %H:%M JST"),
     })
 
+@app.route("/api/ai-search", methods=["POST"])
+def ai_search_endpoint():
+    """自然言語で検索条件を解釈してスポットを返す（上部インプット用）"""
+    body    = request.get_json(force=True)
+    lat     = body.get("lat")
+    lng     = body.get("lng")
+    message = body.get("message", "").strip()
+
+    if lat is None or lng is None:
+        return jsonify({"error": "位置情報を取得してください"}), 400
+    if not message:
+        return jsonify({"error": "メッセージを入力してください"}), 400
+
+    # Claude で検索条件を抽出
+    valid_moods = list(MOOD_QUERIES.keys())
+    valid_transports = list(TRANSPORT_MODES.keys())
+    try:
+        extract_resp = anthropic_client.messages.create(
+            model=MODEL, max_tokens=200,
+            messages=[{"role": "user", "content":
+                f"ユーザーのお出かけ希望: 「{message}」\n\n"
+                f"以下のJSONで検索条件を抽出してください:\n"
+                f"moods: {valid_moods} から該当するものを配列で（なければ[]）\n"
+                f"transport: {valid_transports} のいずれか（デフォルト: car）\n"
+                f"max_travel_min: 移動時間上限の分数（デフォルト: 90）\n"
+                f'出力例: {{"moods":["水族館","室内遊び場"],"transport":"car","max_travel_min":60}}\n'
+                f"JSON以外出力しないこと。"
+            }]
+        )
+        raw = extract_resp.content[0].text.strip()
+        start, end = raw.find("{"), raw.rfind("}") + 1
+        params = json.loads(raw[start:end]) if start >= 0 and end > start else {}
+    except Exception as e:
+        print(f"[WARN] 条件抽出失敗: {e}")
+        params = {}
+
+    moods          = [m for m in params.get("moods", []) if m in valid_moods]
+    transport      = params.get("transport", "car") if params.get("transport") in valid_transports else "car"
+    max_travel_min = int(params.get("max_travel_min", 90))
+
+    weather       = get_weather(lat, lng)
+    location_name = reverse_geocode(lat, lng)
+    spots         = collect_spots(lat, lng, transport, moods, weather, location_name, max_travel_min)
+
+    return jsonify({
+        "spots":         spots,
+        "weather":       weather,
+        "location_name": location_name,
+        "transport":     transport,
+        "moods":         moods,
+        "max_travel_min": max_travel_min,
+        "generated_at":  datetime.now(JST).strftime("%Y-%m-%d %H:%M JST"),
+    })
+
+
 @app.route("/api/chat", methods=["POST"])
 def chat_endpoint():
+    """結果画面のフィードバックチャット。返信＋条件を更新してスポット再検索"""
     body    = request.get_json(force=True)
     history = body.get("history", [])
     message = body.get("message", "").strip()
-    context = body.get("context", {})   # spots, weather, location_name, etc.
+    context = body.get("context", {})
+    lat     = body.get("lat")
+    lng     = body.get("lng")
 
     if not message:
         return jsonify({"error": "メッセージを入力してください"}), 400
@@ -510,17 +568,43 @@ def chat_endpoint():
 移動手段: {TRANSPORT_LABELS.get(context.get('transport','car'),'車')}
 希望テーマ: {'・'.join(context.get('moods',[])) or '特になし'}
 
-ユーザーのフィードバックを受けて、再提案・追加情報・アドバイスを日本語で答えてください。
-回答は200字以内を目安に。別のスポットを提案する場合は名前・特徴・理由を明確に。"""
+フィードバックを受けて、以下のJSONで返してください（他のテキスト不要）:
+{{"reply":"アドバイス（100字以内）","moods":["更新後のmoods配列（変更なければ現在のまま）"],"transport":"car/train/bike/walk","max_travel_min":90}}
+moods の選択肢: {list(MOOD_QUERIES.keys())}"""
 
     try:
         resp = anthropic_client.messages.create(
-            model=MODEL, max_tokens=700, system=system,
+            model=MODEL, max_tokens=400, system=system,
             messages=history + [{"role": "user", "content": message}],
         )
-        return jsonify({"reply": resp.content[0].text.strip()})
+        raw = resp.content[0].text.strip()
+        start, end = raw.find("{"), raw.rfind("}") + 1
+        data = json.loads(raw[start:end]) if start >= 0 and end > start else {}
+        reply         = data.get("reply", raw[:100])
+        new_moods     = [m for m in data.get("moods", context.get("moods", [])) if m in MOOD_QUERIES]
+        new_transport = data.get("transport", context.get("transport", "car"))
+        new_max_min   = int(data.get("max_travel_min", context.get("max_travel_min", 90)))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+    # スポット再検索
+    new_spots = None
+    if lat is not None and lng is not None:
+        try:
+            new_weather = get_weather(lat, lng)
+            location_name = context.get("location_name") or reverse_geocode(lat, lng)
+            new_spots = collect_spots(lat, lng, new_transport, new_moods,
+                                      new_weather, location_name, new_max_min)
+        except Exception as e:
+            print(f"[WARN] 再検索失敗: {e}")
+
+    result = {"reply": reply, "transport": new_transport, "moods": new_moods, "max_travel_min": new_max_min}
+    if new_spots is not None:
+        result["spots"] = new_spots
+        result["weather"] = context.get("weather", {})
+        result["location_name"] = context.get("location_name", "")
+        result["generated_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
+    return jsonify(result)
 
 
 if __name__ == "__main__":

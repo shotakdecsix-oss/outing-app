@@ -173,14 +173,13 @@ body{font-family:'Hiragino Kaku Gothic Pro','Yu Gothic',sans-serif;background:va
       <button class="mood-chip" data-mood="室内遊び場"   onclick="togMood(this)"><span class="ico">🏠</span>室内遊び場</button>
     </div>
 
-    <!-- セットアップ用AIチャット -->
+    <!-- AIでそのまま検索 -->
     <div class="chat-section" style="margin-top:16px;">
-      <h3>💬 AIに相談する</h3>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:12px;">「今日の天気に合う場所は？」「小学生向けのおすすめは？」など検索前に聞いてみてください</p>
-      <div class="chat-messages" id="setup-chat-messages" style="max-height:200px;"></div>
+      <h3>🤖 AIに伝えて検索</h3>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:12px;">「車で1時間以内で子供が喜ぶ自然系」「室内で雨でも大丈夫な場所」など自由に入力してください</p>
       <div class="chat-input-row">
-        <textarea class="chat-input" id="setup-chat-input" rows="2" placeholder="何でも聞いてください..." onkeydown="setupChatKeydown(event)"></textarea>
-        <button class="btn-send" id="setup-btn-send" onclick="sendSetupChat()">➤</button>
+        <textarea class="chat-input" id="ai-search-input" rows="2" placeholder="行きたい場所や条件を入力..." onkeydown="aiSearchKeydown(event)"></textarea>
+        <button class="btn-send" id="ai-search-btn" onclick="doAiSearch()">➤</button>
       </div>
     </div>
 
@@ -206,10 +205,10 @@ body{font-family:'Hiragino Kaku Gothic Pro','Yu Gothic',sans-serif;background:va
     </div>
     <div id="spots-list"></div>
 
-    <!-- CHAT -->
+    <!-- CHAT / RE-SEARCH -->
     <div class="chat-section">
-      <h3>💬 AIに相談する</h3>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:12px;">「もっと近い場所がいい」「室内がいい」「雨でも大丈夫な場所は？」など自由に話しかけてください</p>
+      <h3>💬 フィードバックで再検索</h3>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:12px;">「もっと近い場所がいい」「室内がいい」「電車で行きたい」などで条件を更新してスポットを入れ替えます</p>
       <div class="chat-messages" id="chat-messages"></div>
       <div class="chat-input-row">
         <textarea class="chat-input" id="chat-input" rows="2" placeholder="フィードバックを入力..." onkeydown="chatKeydown(event)"></textarea>
@@ -228,7 +227,6 @@ let maxTravelMin = 90;
 let moods = [];
 let lastResult = null;
 let chatHistory = [];
-let setupChatHistory = [];
 
 // ===== INIT =====
 window.onload = () => {
@@ -429,7 +427,7 @@ async function sendChat() {
   addChatMsg('user', msg);
   chatHistory.push({ role: 'user', content: msg });
 
-  const typingEl = addChatMsg('ai', '...');
+  const typingEl = addChatMsg('ai', '⏳ 条件を更新してスポットを再検索中...');
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -438,12 +436,21 @@ async function sendChat() {
         message: msg,
         history: chatHistory.slice(-8),
         context: lastResult,
+        lat, lng,
       }),
     });
     const data = await res.json();
     const reply = data.reply || data.error || 'エラーが発生しました';
     typingEl.textContent = reply;
     chatHistory.push({ role: 'assistant', content: reply });
+
+    // スポットが更新されていれば差し替え
+    if (data.spots && data.spots.length > 0) {
+      lastResult = { ...lastResult, ...data };
+      transport = data.transport || transport;
+      moods = data.moods || moods;
+      renderResults(lastResult);
+    }
   } catch(e) {
     typingEl.textContent = 'エラーが発生しました: ' + e.message;
   }
@@ -461,57 +468,45 @@ function addChatMsg(role, text) {
   return el;
 }
 
-// ===== SETUP CHAT =====
-function setupChatKeydown(e) {
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSetupChat(); }
+// ===== AI SEARCH (上部インプット) =====
+function aiSearchKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doAiSearch(); }
 }
 
-async function sendSetupChat() {
-  const input = document.getElementById('setup-chat-input');
+async function doAiSearch() {
+  if (!lat || !lng) { alert('位置情報を取得してください'); return; }
+  const input = document.getElementById('ai-search-input');
   const msg = input.value.trim();
   if (!msg) return;
 
   input.value = '';
-  document.getElementById('setup-btn-send').disabled = true;
-  addSetupChatMsg('user', msg);
-  setupChatHistory.push({ role: 'user', content: msg });
+  document.getElementById('ai-search-btn').disabled = true;
+  show('loading'); hide('results');
+  document.getElementById('loading-msg').textContent = 'AIが条件を解釈してスポットを探しています...';
 
-  const typingEl = addSetupChatMsg('ai', '...');
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch('/api/ai-search', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        message: msg,
-        history: setupChatHistory.slice(-8),
-        context: {
-          spots: [],
-          weather: null,
-          location_name: document.getElementById('loc-text').textContent,
-          transport: transport,
-          moods: moods,
-        },
-      }),
+      body: JSON.stringify({ lat, lng, message: msg }),
     });
     const data = await res.json();
-    const reply = data.reply || data.error || 'エラーが発生しました';
-    typingEl.textContent = reply;
-    setupChatHistory.push({ role: 'assistant', content: reply });
+    if (data.error) throw new Error(data.error);
+    lastResult = data;
+    chatHistory = [];
+    // UIの条件も更新
+    transport = data.transport || transport;
+    moods = data.moods || moods;
+    maxTravelMin = data.max_travel_min || maxTravelMin;
+    renderResults(data);
+    hide('loading'); show('results');
   } catch(e) {
-    typingEl.textContent = 'エラーが発生しました: ' + e.message;
+    hide('loading');
+    document.getElementById('error-msg').textContent = '⚠️ エラー: ' + e.message;
+    document.getElementById('error-msg').classList.remove('hidden');
+    show('setup-card');
   }
-  document.getElementById('setup-btn-send').disabled = false;
-  input.focus();
-}
-
-function addSetupChatMsg(role, text) {
-  const wrap = document.getElementById('setup-chat-messages');
-  const el = document.createElement('div');
-  el.className = `chat-msg ${role}`;
-  el.textContent = text;
-  wrap.appendChild(el);
-  wrap.scrollTop = wrap.scrollHeight;
-  return el;
+  document.getElementById('ai-search-btn').disabled = false;
 }
 
 // ===== UTILS =====
