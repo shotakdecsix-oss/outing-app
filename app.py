@@ -258,13 +258,35 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
                         "mode":      "transit",
                     }
             print(f"[TRAVEL] Directions API transit also failed: {dir_data.get('status')}")
+            # transit が全滅 → 車の時間 × 1.5 で概算
+            try:
+                dr2 = requests.get(url, params={
+                    "origins": f"{origin_lat},{origin_lng}",
+                    "destinations": f"{dest_lat},{dest_lng}",
+                    "mode": "driving", "language": "ja", "key": GOOGLE_KEY,
+                }, timeout=8)
+                dr2.raise_for_status()
+                dr2_elem = dr2.json().get("rows", [{}])[0].get("elements", [{}])[0]
+                if dr2_elem.get("status") == "OK":
+                    drive_sec = dr2_elem["duration"]["value"]
+                    transit_sec = int(drive_sec * 1.5)
+                    transit_min = transit_sec // 60
+                    return {
+                        "text":      f"約{transit_min}分（参考値）",
+                        "value":     transit_sec,
+                        "distance":  dr2_elem["distance"]["text"],
+                        "estimated": True,
+                        "mode":      "transit_estimated",
+                    }
+            except Exception:
+                pass
     except Exception as e:
         print(f"[WARN] 移動時間取得失敗: {e}")
     # 最終フォールバック（直線距離による概算）
     dist_km = haversine(origin_lat, origin_lng, dest_lat, dest_lng)
     speed = {"driving": 50, "transit": 25, "bicycling": 15, "walking": 5}.get(mode, 50)
     mins = round(dist_km / speed * 60)
-    return {"text": f"約{mins}分", "value": mins * 60, "estimated": True, "mode": mode}
+    return {"text": f"約{mins}分（参考値）", "value": mins * 60, "estimated": True, "mode": mode}
 
 def haversine(lat1, lng1, lat2, lng2) -> float:
     R = 6371
@@ -704,7 +726,7 @@ moods の選択肢: {list(MOOD_QUERIES.keys())}"""
     return jsonify(result)
 
 
-@app.route("/api/debug-travel")
+@app.route("/api/debug-travel-disabled")
 def debug_travel():
     """Transit APIのレスポンスを確認するデバッグ用エンドポイント"""
     now_ts = int(_time_module.time())
