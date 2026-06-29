@@ -115,6 +115,7 @@ body{font-family:'Hiragino Kaku Gothic Pro','Yu Gothic',sans-serif;background:va
 
 <div class="app-header">
   <h1>🗺️ 家族お出かけアプリ</h1>
+  <div id="deploy-info" style="position:fixed;top:6px;right:10px;font-size:10px;color:#888;z-index:999;"></div>
   <div class="weather-bar" id="weather-bar">位置情報を取得中...</div>
 </div>
 
@@ -230,6 +231,12 @@ let chatHistory = [];
 window.onload = () => {
   getLocation();
 };
+
+// デプロイ日時取得
+fetch('/api/version').then(r=>r.json()).then(d=>{
+  const el = document.getElementById('deploy-info');
+  if(el && d.deployed_at) el.textContent = 'deploy: ' + d.deployed_at;
+}).catch(()=>{});
 
 // ===== LOCATION =====
 function getLocation() {

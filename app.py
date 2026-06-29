@@ -27,6 +27,7 @@ PORT            = int(CFG.get("port", 5051))
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 app = Flask(__name__, static_folder=BASE_DIR)
 JST = timezone(timedelta(hours=9))
+SERVER_START = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
 
 # ---------------------------------------------------------------------------
 # 気分 → Places 検索クエリ マッピング
@@ -423,6 +424,7 @@ def version():
         "google_places": bool(GOOGLE_KEY),
         "anthropic": bool(ANTHROPIC_KEY),
         "time": now,
+        "deployed_at": SERVER_START,
     })
 
 @app.route("/api/geocode", methods=["GET"])
@@ -469,31 +471,35 @@ def spots_endpoint():
         return jsonify({"error": "lat, lng が必要です"}), 400
 
     # AI追加指示があればmoods・検索クエリを補完
+    extra_query = ""
     if ai_hint:
         try:
+            valid_moods = list(MOOD_QUERIES.keys())
             extract = anthropic_client.messages.create(
                 model=MODEL, max_tokens=200,
                 messages=[{"role": "user", "content":
-                    f"お出かけ追加条件: 「{ai_hint}」\n\n"
-                    f"選択中のmood: {moods}\n"
-                    f"以下のmoodリストから条件に合うものを追加してJSON配列で返してください。\n"
-                    f"選択中のものも含めてよい。追加がなければ選択中のものをそのまま返す。\n"
-                    f"moodリスト: {list(MOOD_QUERIES.keys())}\n"
-                    f"また、ai_hintを検索クエリに活かすための補足キーワード（日本語2語以内）も返す。\n"
-                    f'出力: {{"moods":["..."],"extra_query":"室内 雨天"}}\n'
-                    f"JSON以外出力しないこと。"
+                    f"お出かけの追加条件:「{ai_hint}」\n"
+                    f"現在の気分選択: {moods or '未選択'}\n\n"
+                    f"①この条件に合うmoodを以下リストから選ぶ（複数可、なければ[]）:\n"
+                    f"  {valid_moods}\n"
+                    f"②Google Places検索に使う日本語キーワード（2語以内）:\n\n"
+                    f'JSON出力: {{"moods":["室内遊び場","科学館"],"query":"室内 雨天"}}\n'
+                    f"JSON以外不要。"
                 }]
             )
             raw = extract.content[0].text.strip()
             s, e = raw.find("{"), raw.rfind("}") + 1
-            parsed = json.loads(raw[s:e]) if s >= 0 and e > s else {}
-            moods = [m for m in parsed.get("moods", moods) if m in MOOD_QUERIES] or moods
-            extra_query = parsed.get("extra_query", "")
+            if s >= 0 and e > s:
+                parsed = json.loads(raw[s:e])
+                ai_moods = [m for m in parsed.get("moods", []) if m in valid_moods]
+                # 手動選択moodsにAI推定moodsをマージ
+                merged = list(dict.fromkeys(moods + ai_moods))
+                if merged:
+                    moods = merged
+                extra_query = parsed.get("query", "").strip()
+            print(f"[AI_HINT] moods={moods}, extra_query={extra_query!r}")
         except Exception as ex:
             print(f"[WARN] ai_hint抽出失敗: {ex}")
-            extra_query = ""
-    else:
-        extra_query = ""
 
     weather       = get_weather(lat, lng)
     location_name = reverse_geocode(lat, lng)
