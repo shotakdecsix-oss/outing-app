@@ -173,14 +173,12 @@ body{font-family:'Hiragino Kaku Gothic Pro','Yu Gothic',sans-serif;background:va
       <button class="mood-chip" data-mood="室内遊び場"   onclick="togMood(this)"><span class="ico">🏠</span>室内遊び場</button>
     </div>
 
-    <!-- AIでそのまま検索 -->
-    <div class="chat-section" style="margin-top:16px;">
-      <h3>🤖 AIに伝えて検索</h3>
-      <p style="font-size:12px;color:var(--sub);margin-bottom:12px;">「車で1時間以内で子供が喜ぶ自然系」「室内で雨でも大丈夫な場所」など自由に入力してください</p>
-      <div class="chat-input-row">
-        <textarea class="chat-input" id="ai-search-input" rows="2" placeholder="行きたい場所や条件を入力..." onkeydown="aiSearchKeydown(event)"></textarea>
-        <button class="btn-send" id="ai-search-btn" onclick="doAiSearch()">➤</button>
-      </div>
+    <!-- AI補助インプット -->
+    <div style="margin-top:16px;">
+      <div class="section-label">🤖 AIへの追加指示（任意）</div>
+      <textarea class="chat-input" id="ai-search-input" rows="2"
+        placeholder="例：雨天でも楽しめる場所　例：小学生低学年でも楽しめる"
+        style="width:100%;box-sizing:border-box;"></textarea>
     </div>
 
     <div id="error-msg" class="error-box hidden"></div>
@@ -345,7 +343,10 @@ async function doSearch() {
     const res = await fetch('/api/spots', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ lat, lng, transport, moods, max_travel_min: maxTravelMin }),
+      body: JSON.stringify({
+        lat, lng, transport, moods, max_travel_min: maxTravelMin,
+        ai_hint: (document.getElementById('ai-search-input').value || '').trim(),
+      }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);

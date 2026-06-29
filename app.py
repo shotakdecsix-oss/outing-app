@@ -337,13 +337,15 @@ JSON以外出力しないこと。"""
 # ---------------------------------------------------------------------------
 def collect_spots(lat: float, lng: float, transport: str,
                   moods: list[str], weather: dict, location_name: str,
-                  max_travel_min: int = 90) -> list[dict]:
+                  max_travel_min: int = 90, extra_query: str = "") -> list[dict]:
     # 検索クエリ決定
     queries = []
     for mood in moods:
         queries.extend(MOOD_QUERIES.get(mood, []))
     if not queries:
         queries = DEFAULT_QUERIES
+    if extra_query:
+        queries = [f"{q} {extra_query}".strip() for q in queries] or [extra_query]
     queries = list(dict.fromkeys(queries))  # 重複除去
 
     # Google Places で候補収集
@@ -461,14 +463,42 @@ def spots_endpoint():
     transport = body.get("transport", "car")
     moods     = body.get("moods", [])
     max_min   = int(body.get("max_travel_min", 90))
+    ai_hint   = body.get("ai_hint", "").strip()
 
     if lat is None or lng is None:
         return jsonify({"error": "lat, lng が必要です"}), 400
 
+    # AI追加指示があればmoods・検索クエリを補完
+    if ai_hint:
+        try:
+            extract = anthropic_client.messages.create(
+                model=MODEL, max_tokens=200,
+                messages=[{"role": "user", "content":
+                    f"お出かけ追加条件: 「{ai_hint}」\n\n"
+                    f"選択中のmood: {moods}\n"
+                    f"以下のmoodリストから条件に合うものを追加してJSON配列で返してください。\n"
+                    f"選択中のものも含めてよい。追加がなければ選択中のものをそのまま返す。\n"
+                    f"moodリスト: {list(MOOD_QUERIES.keys())}\n"
+                    f"また、ai_hintを検索クエリに活かすための補足キーワード（日本語2語以内）も返す。\n"
+                    f'出力: {{"moods":["..."],"extra_query":"室内 雨天"}}\n'
+                    f"JSON以外出力しないこと。"
+                }]
+            )
+            raw = extract.content[0].text.strip()
+            s, e = raw.find("{"), raw.rfind("}") + 1
+            parsed = json.loads(raw[s:e]) if s >= 0 and e > s else {}
+            moods = [m for m in parsed.get("moods", moods) if m in MOOD_QUERIES] or moods
+            extra_query = parsed.get("extra_query", "")
+        except Exception as ex:
+            print(f"[WARN] ai_hint抽出失敗: {ex}")
+            extra_query = ""
+    else:
+        extra_query = ""
+
     weather       = get_weather(lat, lng)
     location_name = reverse_geocode(lat, lng)
     spots         = collect_spots(lat, lng, transport, moods, weather,
-                                  location_name, max_min)
+                                  location_name, max_min, extra_query=extra_query)
 
     return jsonify({
         "spots":         spots,
