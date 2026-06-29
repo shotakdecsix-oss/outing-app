@@ -229,30 +229,35 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
                 "estimated": False,
                 "mode":      mode,
             }
-        # transit が ZERO_RESULTS なら driving で再取得して1.5倍
+        # transit が ZERO_RESULTS なら Directions API で再試行（Google マップ同等データ）
         if mode == "transit" and status == "ZERO_RESULTS":
-            driving_params = {
-                "origins":      f"{origin_lat},{origin_lng}",
-                "destinations": f"{dest_lat},{dest_lng}",
-                "mode":         "driving",
-                "language":     "ja",
-                "key":          GOOGLE_KEY,
+            dir_params = {
+                "origin":         f"{origin_lat},{origin_lng}",
+                "destination":    f"{dest_lat},{dest_lng}",
+                "mode":           "transit",
+                "departure_time": int(_time_module.time()),
+                "language":       "ja",
+                "key":            GOOGLE_KEY,
             }
-            dr = requests.get(url, params=driving_params, timeout=8)
+            dr = requests.get("https://maps.googleapis.com/maps/api/directions/json",
+                              params=dir_params, timeout=10)
             dr.raise_for_status()
-            dr_rows = dr.json().get("rows", [])
-            dr_elem = dr_rows[0]["elements"][0] if dr_rows else {}
-            if dr_elem.get("status") == "OK":
-                drive_sec = dr_elem["duration"]["value"]
-                transit_sec = int(drive_sec * 1.5)
-                transit_min = transit_sec // 60
-                return {
-                    "text":      f"約{transit_min}分",
-                    "value":     transit_sec,
-                    "distance":  dr_elem["distance"]["text"],
-                    "estimated": True,
-                    "mode":      "transit_estimated",
-                }
+            dir_data = dr.json()
+            routes = dir_data.get("routes", [])
+            if routes:
+                leg = routes[0].get("legs", [{}])[0]
+                dur = leg.get("duration", {})
+                dist = leg.get("distance", {})
+                if dur.get("value"):
+                    print(f"[TRAVEL] Directions API transit → {dur['text']}")
+                    return {
+                        "text":      dur["text"],
+                        "value":     dur["value"],
+                        "distance":  dist.get("text", ""),
+                        "estimated": False,
+                        "mode":      "transit",
+                    }
+            print(f"[TRAVEL] Directions API transit also failed: {dir_data.get('status')}")
     except Exception as e:
         print(f"[WARN] 移動時間取得失敗: {e}")
     # 最終フォールバック（直線距離による概算）
@@ -701,27 +706,46 @@ moods の選択肢: {list(MOOD_QUERIES.keys())}"""
 
 @app.route("/api/debug-travel")
 def debug_travel():
-    """Transit APIのレスポンスを丸ごと返すデバッグ用エンドポイント"""
-    # 横浜駅 → 八景島シーパラダイス（電車で実在するルート）
-    origin = "35.4658,139.6225"
-    dest   = "35.3879,139.6168"
-    result = {}
-    for mode in ["driving", "transit"]:
-        params = {
-            "origins":      origin,
-            "destinations": dest,
-            "mode":         mode,
-            "language":     "ja",
-            "key":          GOOGLE_KEY,
-        }
-        if mode == "transit":
-            params["departure_time"] = int(_time_module.time())
-        try:
-            r = requests.get("https://maps.googleapis.com/maps/api/distancematrix/json",
-                             params=params, timeout=10)
-            result[mode] = r.json()
-        except Exception as e:
-            result[mode] = {"error": str(e)}
+    """Transit APIのレスポンスを確認するデバッグ用エンドポイント"""
+    now_ts = int(_time_module.time())
+    # 横浜駅 → 八景島シーパラダイス
+    origin, dest = "35.4658,139.6225", "35.3879,139.6168"
+    result = {"departure_time_used": now_ts}
+
+    # Distance Matrix (driving)
+    try:
+        r = requests.get("https://maps.googleapis.com/maps/api/distancematrix/json",
+                         params={"origins": origin, "destinations": dest,
+                                 "mode": "driving", "language": "ja", "key": GOOGLE_KEY}, timeout=10)
+        d = r.json(); elem = d.get("rows",[{}])[0].get("elements",[{}])[0]
+        result["distancematrix_driving"] = {"status": elem.get("status"), "duration": elem.get("duration",{}).get("text")}
+    except Exception as e:
+        result["distancematrix_driving"] = {"error": str(e)}
+
+    # Distance Matrix (transit)
+    try:
+        r = requests.get("https://maps.googleapis.com/maps/api/distancematrix/json",
+                         params={"origins": origin, "destinations": dest, "mode": "transit",
+                                 "departure_time": now_ts, "language": "ja", "key": GOOGLE_KEY}, timeout=10)
+        d = r.json(); elem = d.get("rows",[{}])[0].get("elements",[{}])[0]
+        result["distancematrix_transit"] = {"status": elem.get("status"), "duration": elem.get("duration",{}).get("text")}
+    except Exception as e:
+        result["distancematrix_transit"] = {"error": str(e)}
+
+    # Directions API (transit)
+    try:
+        r = requests.get("https://maps.googleapis.com/maps/api/directions/json",
+                         params={"origin": origin, "destination": dest, "mode": "transit",
+                                 "departure_time": now_ts, "language": "ja", "key": GOOGLE_KEY}, timeout=10)
+        d = r.json(); routes = d.get("routes", [])
+        if routes:
+            leg = routes[0].get("legs", [{}])[0]
+            result["directions_transit"] = {"status": d.get("status"), "duration": leg.get("duration",{}).get("text")}
+        else:
+            result["directions_transit"] = {"status": d.get("status"), "routes": 0}
+    except Exception as e:
+        result["directions_transit"] = {"error": str(e)}
+
     return jsonify(result)
 
 if __name__ == "__main__":
