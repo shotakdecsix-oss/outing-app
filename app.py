@@ -1,6 +1,6 @@
 """
 家族お出かけアプリ — Flask バックエンド
-Google Places API + Open-Meteo (無料) + Claude AI
+Google Places API + wttr.in (天気) + Claude AI
 Config: outing_config.json (APIキーはチャットに貼らない)
 """
 
@@ -57,15 +57,13 @@ TRANSPORT_LABELS = {
 }
 
 # ---------------------------------------------------------------------------
-# 天気キャッシュ (Open-Meteo レートリミット対策 + コールドスタート対策)
-# ファイルに永続化することでRenderのスリープ後も前回値を再利用
+# 天気キャッシュ（ファイル永続化 + コールドスタート対策）
 # ---------------------------------------------------------------------------
 WEATHER_CACHE_FILE = os.path.join(BASE_DIR, "weather_cache.json")
-WEATHER_CACHE_TTL  = 3600   # 1時間キャッシュ（天気は1時間では大きく変わらない）
-WEATHER_STALE_TTL  = 86400  # 429の場合はこの時間（24h）まで古い値を返す
+WEATHER_CACHE_TTL  = 3600   # 1時間キャッシュ
+WEATHER_STALE_TTL  = 86400  # フォールバック用（24h以内の古い値を使う）
 
 def _load_weather_cache() -> dict:
-    """ファイルからキャッシュをロード（コールドスタート対策）"""
     if not os.path.exists(WEATHER_CACHE_FILE):
         return {}
     try:
@@ -86,22 +84,36 @@ def _save_weather_cache(cache: dict):
 
 _weather_cache: dict = _load_weather_cache()
 
-# ---------------------------------------------------------------------------
-# 天気取得 (Open-Meteo — APIキー不要)
-# ---------------------------------------------------------------------------
-WMO_CODES = {
-    0: "快晴", 1: "晴れ", 2: "一部曇り", 3: "曇り",
-    45: "霧", 48: "着氷性の霧",
-    51: "霧雨（弱）", 53: "霧雨", 55: "霧雨（強）",
-    61: "小雨", 63: "雨", 65: "大雨",
-    71: "小雪", 73: "雪", 75: "大雪",
-    77: "霧雪",
-    80: "にわか雨（弱）", 81: "にわか雨", 82: "にわか雨（強）",
-    85: "にわか雪", 86: "にわか大雪",
-    95: "雷雨", 96: "雹を伴う雷雨", 99: "強雹を伴う雷雨",
+# wttr.in 英語天気説明 → 日本語マッピング
+WTTR_TO_JA = {
+    "Sunny": "晴れ", "Clear": "快晴",
+    "Partly cloudy": "一部曇り", "Cloudy": "曇り", "Overcast": "曇り",
+    "Mist": "霧", "Fog": "霧", "Freezing fog": "着氷性の霧",
+    "Patchy rain possible": "にわか雨の可能性",
+    "Patchy snow possible": "にわか雪の可能性",
+    "Blowing snow": "地吹雪", "Blizzard": "吹雪",
+    "Light drizzle": "霧雨（弱）", "Freezing drizzle": "着氷性の霧雨",
+    "Heavy freezing drizzle": "着氷性の霧雨（強）",
+    "Patchy light drizzle": "霧雨",
+    "Light rain": "小雨", "Moderate rain": "雨", "Heavy rain": "大雨",
+    "Light rain shower": "にわか雨（弱）",
+    "Moderate or heavy rain shower": "にわか雨",
+    "Torrential rain shower": "豪雨",
+    "Light sleet": "みぞれ（弱）",
+    "Moderate or heavy sleet": "みぞれ",
+    "Light snow": "小雪", "Moderate snow": "雪", "Heavy snow": "大雪",
+    "Light snow showers": "にわか雪（弱）",
+    "Moderate or heavy snow showers": "にわか雪",
+    "Patchy light rain with thunder": "雷雨（弱）",
+    "Moderate or heavy rain with thunder": "雷雨",
+    "Thundery outbreaks possible": "雷雨の可能性",
 }
 
+# ---------------------------------------------------------------------------
+# 天気取得 (wttr.in — APIキー不要・レートリミット緩め)
+# ---------------------------------------------------------------------------
 def get_weather(lat: float, lng: float) -> dict:
+    """wttr.in を使って天気取得"""
     cache_key = (round(lat, 2), round(lng, 2))
     now = _time_module.time()
 
@@ -113,58 +125,43 @@ def get_weather(lat: float, lng: float) -> dict:
             return cached
 
     try:
-        params = {
-            "latitude":  lat,
-            "longitude": lng,
-            "current":   "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,precipitation",
-            "timezone":  "Asia/Tokyo",
-            "forecast_days": 1,
-        }
-        r = requests.get("https://api.open-meteo.com/v1/forecast",
-                         params=params, timeout=10)
+        url = f"https://wttr.in/{lat},{lng}?format=j1"
+        r = requests.get(url, timeout=10, headers={"User-Agent": "outing-app/1.0"})
         r.raise_for_status()
         data = r.json()
-        cur = data.get("current", {})
-        if not cur:
-            print(f"[WARN] 天気API: currentフィールドなし。レスポンス: {data}")
-            return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
-                    "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
-                    "error": "currentフィールドなし"}
-        code = cur.get("weather_code", 0)
+        cur = data["current_condition"][0]
+
+        desc_en  = cur["weatherDesc"][0]["value"]
+        temp     = float(cur["temp_C"])
+        feels    = float(cur["FeelsLikeC"])
+        wind_ms  = round(float(cur["windspeedKmph"]) / 3.6, 1)
+        precip   = float(cur["precipMM"])
+        desc_ja  = WTTR_TO_JA.get(desc_en, desc_en)
+        desc_low = desc_en.lower()
+
         result = {
-            "temp":        round(cur.get("temperature_2m", 20), 1),
-            "feels_like":  round(cur.get("apparent_temperature", 20), 1),
-            "condition":   WMO_CODES.get(code, f"コード{code}"),
-            "wind":        round(cur.get("wind_speed_10m", 0), 1),
-            "precip":      round(cur.get("precipitation", 0), 1),
-            "code":        code,
-            "is_rainy":    code in (51,53,55,61,63,65,80,81,82,95,96,99),
-            "is_snowy":    code in (71,73,75,77,85,86),
+            "temp":       round(temp, 1),
+            "feels_like": round(feels, 1),
+            "condition":  desc_ja,
+            "wind":       wind_ms,
+            "precip":     precip,
+            "code":       int(cur.get("weatherCode", 0)),
+            "is_rainy":   any(w in desc_low for w in ["rain", "drizzle", "shower", "thunder"]),
+            "is_snowy":   any(w in desc_low for w in ["snow", "blizzard", "sleet"]),
         }
         _weather_cache[cache_key] = (now, result)
-        _save_weather_cache(_weather_cache)   # ← ファイルに永続化（スリープ対策）
-        print(f"[WEATHER] 取得成功: {result['condition']} {result['temp']}℃")
+        _save_weather_cache(_weather_cache)
+        print(f"[WEATHER] 取得成功 (wttr.in): {result['condition']} {result['temp']}℃")
         return result
 
-    except requests.exceptions.HTTPError as e:
-        # 429 → スタールなキャッシュがあれば返す（24h以内）
-        if e.response is not None and e.response.status_code == 429:
-            if cache_key in _weather_cache:
-                ts, stale = _weather_cache[cache_key]
-                if now - ts < WEATHER_STALE_TTL:
-                    age_min = int((now - ts) / 60)
-                    print(f"[WEATHER] 429 → スタールキャッシュ返却 (age={age_min}分)")
-                    return {**stale, "stale": True}
-        print(f"[WARN] 天気取得HTTPエラー: {e}")
-        return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
-                "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
-                "error": str(e)}
-    except requests.exceptions.Timeout:
-        print(f"[WARN] 天気取得タイムアウト (lat={lat}, lng={lng})")
-        return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
-                "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
-                "error": "timeout"}
     except Exception as e:
+        # 失敗時：古いキャッシュがあれば返す（24h以内）
+        if cache_key in _weather_cache:
+            ts, stale = _weather_cache[cache_key]
+            if now - ts < WEATHER_STALE_TTL:
+                age_min = int((now - ts) / 60)
+                print(f"[WEATHER] 取得失敗 → 古いキャッシュ返却 (age={age_min}分)")
+                return {**stale, "stale": True}
         print(f"[WARN] 天気取得失敗: {type(e).__name__}: {e}")
         return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
                 "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
@@ -272,7 +269,7 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
                 "estimated": False,
                 "mode":      mode,
             }
-        # transit が ZERO_RESULTS なら Directions API で再試行（Google マップ同等データ）
+        # transit が ZERO_RESULTS なら Directions API で再試行
         if mode == "transit" and status == "ZERO_RESULTS":
             dir_params = {
                 "origin":         f"{origin_lat},{origin_lng}",
@@ -292,7 +289,6 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
                 dur = leg.get("duration", {})
                 dist = leg.get("distance", {})
                 if dur.get("value"):
-                    print(f"[TRAVEL] Directions API transit → {dur['text']}")
                     return {
                         "text":      dur["text"],
                         "value":     dur["value"],
@@ -300,7 +296,6 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
                         "estimated": False,
                         "mode":      "transit",
                     }
-            print(f"[TRAVEL] Directions API transit also failed: {dir_data.get('status')}")
             # transit が全滅 → 車の時間 × 1.5 で概算
             try:
                 dr2 = requests.get(url, params={
@@ -383,7 +378,6 @@ def build_spot_context(weather: dict, transport: str, moods: list[str],
     )
 
 def generate_reasons(spots: list[dict], context_str: str) -> list[str]:
-    """各スポットに対してClaudeがおすすめ理由を生成する"""
     spots_text = "\n".join(
         f"{i+1}. {s['name']}（{s.get('address','')}）"
         f" 評価:{s.get('rating','不明')} 種別:{','.join(s.get('types',[])[:3])}"
@@ -417,7 +411,6 @@ JSON以外出力しないこと。"""
         return ["おすすめスポットです"] * len(spots)
 
 def claude_fallback_spots(context_str: str, n: int = 5) -> list[dict]:
-    """Google Placesが使えない・結果不足のときClaudeの知識でスポットを補完"""
     prompt = f"""あなたは日本の家族お出かけスポットに詳しいプロです。
 以下の状況に合わせて、小学生の子供がいる家族向けのおすすめスポットを{n}件提案してください。
 実在する施設のみ挙げてください。
@@ -447,7 +440,6 @@ JSON以外出力しないこと。"""
         if "```" in raw:
             raw = raw.split("```")[1].split("```")[0].replace("json","").strip()
         spots = json.loads(raw)
-        # フォールバック形式に統一
         for s in spots:
             s["source"] = "ai_fallback"
             s["lat"] = None
@@ -465,7 +457,6 @@ JSON以外出力しないこと。"""
 def collect_spots(lat: float, lng: float, transport: str,
                   moods: list[str], weather: dict, location_name: str,
                   max_travel_min: int = 90, extra_query: str = "") -> list[dict]:
-    # 検索クエリ決定
     queries = []
     for mood in moods:
         queries.extend(MOOD_QUERIES.get(mood, []))
@@ -473,9 +464,8 @@ def collect_spots(lat: float, lng: float, transport: str,
         queries = DEFAULT_QUERIES
     if extra_query:
         queries = [f"{q} {extra_query}".strip() for q in queries] or [extra_query]
-    queries = list(dict.fromkeys(queries))  # 重複除去
+    queries = list(dict.fromkeys(queries))
 
-    # Google Places で候補収集
     seen_ids = set()
     candidates = []
     radius = 50000 if transport in ("car", "train") else 20000
@@ -490,7 +480,6 @@ def collect_spots(lat: float, lng: float, transport: str,
         if len(candidates) >= 20:
             break
 
-    # 移動時間でフィルタ
     mode = TRANSPORT_MODES.get(transport, "driving")
     context_str = build_spot_context(weather, transport, moods, location_name)
     valid = []
@@ -510,15 +499,12 @@ def collect_spots(lat: float, lng: float, transport: str,
         if len(valid) >= 10:
             break
 
-    # 評価でソート → 上位5件
     valid.sort(key=lambda x: (-(x.get("rating") or 0), x["travel_min"]))
     top5 = valid[:5]
 
-    # 足りない場合はClaudeで補完
     if len(top5) < 5:
         shortage = 5 - len(top5)
         ai_spots = claude_fallback_spots(context_str, shortage)
-        # AI補完スポットには移動時間の概算を付与
         for s in ai_spots:
             s["travel"] = {"text": f"約{s.get('estimated_travel_min',30)}分", "estimated": True}
             s["travel_min"] = s.get("estimated_travel_min", 30)
@@ -526,7 +512,6 @@ def collect_spots(lat: float, lng: float, transport: str,
             s["photo_url"] = None
         top5.extend(ai_spots)
 
-    # Claude で理由生成（Google Places 取得分のみ）
     google_spots = [s for s in top5 if s.get("source") != "ai_fallback"]
     if google_spots:
         reasons = generate_reasons(google_spots, context_str)
@@ -596,7 +581,6 @@ def spots_endpoint():
     if lat is None or lng is None:
         return jsonify({"error": "lat, lng が必要です"}), 400
 
-    # AI追加指示があればmoods・検索クエリを補完
     extra_query = ""
     if ai_hint:
         try:
@@ -618,12 +602,10 @@ def spots_endpoint():
             if s >= 0 and e > s:
                 parsed = json.loads(raw[s:e])
                 ai_moods = [m for m in parsed.get("moods", []) if m in valid_moods]
-                # 手動選択moodsにAI推定moodsをマージ
                 merged = list(dict.fromkeys(moods + ai_moods))
                 if merged:
                     moods = merged
                 extra_query = parsed.get("query", "").strip()
-            print(f"[AI_HINT] moods={moods}, extra_query={extra_query!r}")
         except Exception as ex:
             print(f"[WARN] ai_hint抽出失敗: {ex}")
 
@@ -643,7 +625,6 @@ def spots_endpoint():
 
 @app.route("/api/ai-search", methods=["POST"])
 def ai_search_endpoint():
-    """自然言語で検索条件を解釈してスポットを返す（上部インプット用）"""
     body    = request.get_json(force=True)
     lat     = body.get("lat")
     lng     = body.get("lng")
@@ -654,7 +635,6 @@ def ai_search_endpoint():
     if not message:
         return jsonify({"error": "メッセージを入力してください"}), 400
 
-    # Claude で検索条件を抽出
     valid_moods = list(MOOD_QUERIES.keys())
     valid_transports = list(TRANSPORT_MODES.keys())
     try:
@@ -698,7 +678,6 @@ def ai_search_endpoint():
 
 @app.route("/api/chat", methods=["POST"])
 def chat_endpoint():
-    """結果画面のフィードバックチャット。返信＋条件を更新してスポット再検索"""
     body    = request.get_json(force=True)
     history = body.get("history", [])
     message = body.get("message", "").strip()
@@ -749,7 +728,6 @@ moods の選択肢: {list(MOOD_QUERIES.keys())}"""
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    # スポット再検索
     new_spots = None
     if lat is not None and lng is not None:
         try:
@@ -768,88 +746,6 @@ moods の選択肢: {list(MOOD_QUERIES.keys())}"""
         result["generated_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     return jsonify(result)
 
-
-@app.route("/api/debug-travel-disabled")
-def debug_travel():
-    """Transit APIのレスポンスを確認するデバッグ用エンドポイント"""
-    now_ts = int(_time_module.time())
-    # 横浜駅 → 八景島シーパラダイス
-    origin, dest = "35.4658,139.6225", "35.3879,139.6168"
-    result = {"departure_time_used": now_ts}
-
-    # Distance Matrix (driving)
-    try:
-        r = requests.get("https://maps.googleapis.com/maps/api/distancematrix/json",
-                         params={"origins": origin, "destinations": dest,
-                                 "mode": "driving", "language": "ja", "key": GOOGLE_KEY}, timeout=10)
-        d = r.json(); elem = d.get("rows",[{}])[0].get("elements",[{}])[0]
-        result["distancematrix_driving"] = {"status": elem.get("status"), "duration": elem.get("duration",{}).get("text")}
-    except Exception as e:
-        result["distancematrix_driving"] = {"error": str(e)}
-
-    # Distance Matrix (transit)
-    try:
-        r = requests.get("https://maps.googleapis.com/maps/api/distancematrix/json",
-                         params={"origins": origin, "destinations": dest, "mode": "transit",
-                                 "departure_time": now_ts, "language": "ja", "key": GOOGLE_KEY}, timeout=10)
-        d = r.json(); elem = d.get("rows",[{}])[0].get("elements",[{}])[0]
-        result["distancematrix_transit"] = {"status": elem.get("status"), "duration": elem.get("duration",{}).get("text")}
-    except Exception as e:
-        result["distancematrix_transit"] = {"error": str(e)}
-
-    # Directions API (transit) - 横浜→八景島
-    try:
-        r = requests.get("https://maps.googleapis.com/maps/api/directions/json",
-                         params={"origin": origin, "destination": dest, "mode": "transit",
-                                 "departure_time": now_ts, "language": "ja", "key": GOOGLE_KEY}, timeout=10)
-        d = r.json(); routes = d.get("routes", [])
-        if routes:
-            leg = routes[0].get("legs", [{}])[0]
-            result["directions_transit_yokohama"] = {"status": d.get("status"), "duration": leg.get("duration",{}).get("text")}
-        else:
-            result["directions_transit_yokohama"] = {"status": d.get("status"), "routes": 0}
-    except Exception as e:
-        result["directions_transit_yokohama"] = {"error": str(e)}
-
-    # Directions API (transit) - 渋谷駅→新宿駅
-    try:
-        r = requests.get("https://maps.googleapis.com/maps/api/directions/json",
-                         params={"origin": "渋谷駅,東京都", "destination": "新宿駅,東京都",
-                                 "mode": "transit", "departure_time": now_ts + 1800,
-                                 "language": "ja", "key": GOOGLE_KEY}, timeout=10)
-        d = r.json(); routes = d.get("routes", [])
-        if routes:
-            leg = routes[0].get("legs", [{}])[0]
-            result["directions_transit_tokyo"] = {"status": d.get("status"), "duration": leg.get("duration",{}).get("text")}
-        else:
-            result["directions_transit_tokyo"] = {"status": d.get("status"), "routes": 0, "error_message": d.get("error_message","")}
-    except Exception as e:
-        result["directions_transit_tokyo"] = {"error": str(e)}
-
-    # Routes API (新しいAPI) - 渋谷→新宿
-    try:
-        import datetime as _dt
-        dep_rfc = (_dt.datetime.utcnow() + _dt.timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        rr = requests.post(
-            "https://routes.googleapis.com/directions/v2:computeRoutes",
-            headers={"X-Goog-Api-Key": GOOGLE_KEY,
-                     "X-Goog-FieldMask": "routes.duration,routes.distanceMeters,routes.legs"},
-            json={"origin":      {"address": "渋谷駅,東京都,日本"},
-                  "destination": {"address": "新宿駅,東京都,日本"},
-                  "travelMode":  "TRANSIT",
-                  "departureTime": dep_rfc},
-            timeout=10)
-        rd = rr.json()
-        routes2 = rd.get("routes", [])
-        if routes2:
-            dur = routes2[0].get("duration", "")
-            result["routes_api_transit_tokyo"] = {"duration": dur, "status": "OK"}
-        else:
-            result["routes_api_transit_tokyo"] = {"status": "NO_ROUTES", "response": rd}
-    except Exception as e:
-        result["routes_api_transit_tokyo"] = {"error": str(e)}
-
-    return jsonify(result)
 
 if __name__ == "__main__":
     print(f"[お出かけアプリ] http://localhost:{PORT} で起動中")
