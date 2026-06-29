@@ -174,6 +174,7 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
         mins = round(dist_km / speed * 60)
         return {"text": f"約{mins}分", "value": mins * 60, "estimated": True}
     try:
+        import time as _time
         url = "https://maps.googleapis.com/maps/api/distancematrix/json"
         params = {
             "origins":      f"{origin_lat},{origin_lng}",
@@ -182,6 +183,8 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
             "language":     "ja",
             "key":          GOOGLE_KEY,
         }
+        if mode == "transit":
+            params["departure_time"] = int(_time.time())
         r = requests.get(url, params=params, timeout=8)
         r.raise_for_status()
         rows = r.json().get("rows", [])
