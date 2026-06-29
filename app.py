@@ -204,7 +204,6 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
         mins = round(dist_km / speed * 60)
         return {"text": f"約{mins}分", "value": mins * 60, "estimated": True}
     try:
-        import time as _time
         url = "https://maps.googleapis.com/maps/api/distancematrix/json"
         params = {
             "origins":      f"{origin_lat},{origin_lng}",
@@ -214,25 +213,34 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
             "key":          GOOGLE_KEY,
         }
         if mode == "transit":
-            params["departure_time"] = int(_time.time())
+            params["departure_time"] = int(_time_module.time())
         r = requests.get(url, params=params, timeout=8)
         r.raise_for_status()
         rows = r.json().get("rows", [])
         elem = rows[0]["elements"][0] if rows else {}
-        if elem.get("status") == "OK":
+        status = elem.get("status")
+        print(f"[TRAVEL] mode={mode} status={status} dest=({dest_lat:.3f},{dest_lng:.3f})")
+        if status == "OK":
+            dur_text = elem["duration"]["text"]
+            dur_val  = elem["duration"]["value"]
+            print(f"[TRAVEL] → {dur_text} ({dur_val//60}分)")
             return {
-                "text":      elem["duration"]["text"],
-                "value":     elem["duration"]["value"],
+                "text":      dur_text,
+                "value":     dur_val,
                 "distance":  elem["distance"]["text"],
                 "estimated": False,
+                "mode":      mode,
             }
+        else:
+            print(f"[TRAVEL] API returned non-OK status: {status}, falling back to estimate")
     except Exception as e:
         print(f"[WARN] 移動時間取得失敗: {e}")
-    # フォールバック
+    # フォールバック（直線距離による概算）
     dist_km = haversine(origin_lat, origin_lng, dest_lat, dest_lng)
-    speed = {"driving": 50, "transit": 35, "bicycling": 15, "walking": 5}.get(mode, 50)
+    speed = {"driving": 50, "transit": 25, "bicycling": 15, "walking": 5}.get(mode, 50)
     mins = round(dist_km / speed * 60)
-    return {"text": f"約{mins}分", "value": mins * 60, "estimated": True}
+    print(f"[TRAVEL] fallback: mode={mode} dist={dist_km:.1f}km speed={speed} → {mins}分")
+    return {"text": f"約{mins}分", "value": mins * 60, "estimated": True, "mode": mode}
 
 def haversine(lat1, lng1, lat2, lng2) -> float:
     R = 6371
