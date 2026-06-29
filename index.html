@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>家族お出かけアプリ 🗺️</title>
+<style>
+:root {
+  --green: #27AE60; --green-d: #1E8449;
+  --blue: #2980B9;  --blue-l: #EBF5FB;
+  --orange: #E67E22; --orange-l: #FEF9E7;
+  --red: #E74C3C;
+  --bg: #F4F6F8; --card: #fff;
+  --text: #2C3E50; --sub: #7F8C8D;
+  --border: #E0E6ED;
+  --radius: 16px; --shadow: 0 4px 20px rgba(0,0,0,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Hiragino Kaku Gothic Pro','Yu Gothic',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
+
+/* HEADER */
+.app-header{background:linear-gradient(135deg,#27AE60,#1A8A4A);color:#fff;padding:16px 20px;position:sticky;top:0;z-index:50;box-shadow:0 2px 12px rgba(0,0,0,.15);}
+.app-header h1{font-size:20px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.weather-bar{font-size:13px;opacity:.9;margin-top:4px;display:flex;gap:14px;flex-wrap:wrap;}
+.weather-bar span{display:flex;align-items:center;gap:4px;}
+
+/* MAIN */
+.main{max-width:960px;margin:0 auto;padding:16px 14px 80px;}
+
+/* SETUP CARD */
+.setup-card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;margin-bottom:18px;}
+.setup-card h2{font-size:16px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:6px;}
+.location-row{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;}
+.loc-text{font-size:13px;color:var(--sub);flex:1;min-width:160px;}
+.loc-text.ok{color:var(--green);}
+.loc-text.err{color:var(--red);}
+
+/* 移動手段 */
+.transport-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px;}
+.transport-btn{border:2px solid var(--border);background:#fff;border-radius:12px;padding:10px 4px;cursor:pointer;text-align:center;transition:all .15s;font-family:inherit;}
+.transport-btn .ico{font-size:22px;display:block;margin-bottom:4px;}
+.transport-btn .lbl{font-size:11px;color:var(--sub);}
+.transport-btn.sel{border-color:var(--green);background:#F0FBF4;}
+.transport-btn.sel .lbl{color:var(--green);font-weight:700;}
+
+/* 移動時間上限 */
+.time-row{display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap;}
+.time-row label{font-size:13px;color:var(--sub);white-space:nowrap;}
+.time-chips{display:flex;gap:6px;flex-wrap:wrap;}
+.time-chip{border:2px solid var(--border);background:#fff;border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;font-family:inherit;transition:all .15s;}
+.time-chip.sel{border-color:var(--blue);background:var(--blue-l);color:var(--blue);font-weight:700;}
+
+/* 気分 */
+.section-label{font-size:13px;color:var(--sub);margin-bottom:8px;font-weight:700;}
+.mood-grid{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;}
+.mood-chip{border:2px solid var(--border);background:#fff;border-radius:20px;padding:6px 14px;font-size:13px;cursor:pointer;font-family:inherit;transition:all .15s;display:flex;align-items:center;gap:5px;}
+.mood-chip.sel{border-color:var(--orange);background:var(--orange-l);color:var(--orange);font-weight:700;}
+.mood-chip .ico{font-size:16px;}
+
+/* 検索ボタン */
+.btn-search{width:100%;padding:14px;background:var(--green);color:#fff;border:none;border-radius:14px;font-size:16px;font-weight:700;cursor:pointer;font-family:inherit;transition:background .15s;display:flex;align-items:center;justify-content:center;gap:8px;}
+.btn-search:hover{background:var(--green-d);}
+.btn-search:disabled{background:#AAA;cursor:not-allowed;}
+
+/* LOADING */
+.loading{text-align:center;padding:40px 20px;color:var(--sub);}
+.spinner{width:44px;height:44px;border:4px solid #E0E6ED;border-top-color:var(--green);border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 14px;}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* SPOTS */
+.spots-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;}
+.spots-title{font-size:16px;font-weight:700;}
+.btn-redo{border:2px solid var(--green);background:#fff;color:var(--green);border-radius:10px;padding:7px 14px;font-size:13px;cursor:pointer;font-family:inherit;font-weight:700;}
+.btn-redo:hover{background:#F0FBF4;}
+
+.spot-card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:14px;overflow:hidden;border:1px solid var(--border);}
+.spot-img{width:100%;height:180px;object-fit:cover;background:linear-gradient(135deg,#C8E6C9,#A5D6A7);}
+.spot-img-placeholder{height:100px;background:linear-gradient(135deg,#DCEDC8,#C5E1A5);display:flex;align-items:center;justify-content:center;font-size:36px;}
+.spot-body{padding:16px;}
+.spot-num{display:inline-block;background:var(--green);color:#fff;border-radius:50%;width:26px;height:26px;text-align:center;line-height:26px;font-size:13px;font-weight:700;margin-right:6px;flex-shrink:0;}
+.spot-name{font-size:17px;font-weight:700;display:flex;align-items:center;}
+.spot-address{font-size:12px;color:var(--sub);margin:4px 0 8px 32px;}
+.spot-meta{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:10px;padding-left:32px;}
+.meta-item{display:flex;align-items:center;gap:4px;font-size:12px;}
+.meta-item .ico{font-size:14px;}
+.rating{color:#F39C12;font-weight:700;}
+.travel-time{color:var(--blue);font-weight:700;}
+.est-badge{font-size:10px;color:var(--sub);margin-left:2px;}
+.spot-reason{background:#F8FFF8;border-left:3px solid var(--green);border-radius:0 8px 8px 0;padding:10px 12px;font-size:13px;line-height:1.6;margin-bottom:12px;}
+.ai-badge{font-size:10px;color:var(--sub);margin-left:6px;}
+.btn-maps{background:var(--blue);color:#fff;border:none;border-radius:10px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;text-decoration:none;font-family:inherit;}
+.btn-maps:hover{background:#2471A3;}
+
+/* CHAT */
+.chat-section{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin-top:18px;border:1px solid var(--border);}
+.chat-section h3{font-size:15px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:6px;}
+.chat-messages{max-height:320px;overflow-y:auto;margin-bottom:12px;display:flex;flex-direction:column;gap:10px;}
+.chat-msg{padding:10px 14px;border-radius:14px;font-size:13px;line-height:1.6;max-width:88%;}
+.chat-msg.user{background:#DCF8C6;align-self:flex-end;border-radius:14px 14px 2px 14px;}
+.chat-msg.ai{background:#F0F0F0;align-self:flex-start;border-radius:14px 14px 14px 2px;}
+.chat-input-row{display:flex;gap:8px;}
+.chat-input{flex:1;border:2px solid var(--border);border-radius:12px;padding:10px 14px;font-size:14px;font-family:inherit;outline:none;resize:none;}
+.chat-input:focus{border-color:var(--green);}
+.btn-send{background:var(--green);color:#fff;border:none;border-radius:12px;padding:10px 16px;cursor:pointer;font-size:18px;flex-shrink:0;}
+.btn-send:disabled{background:#AAA;}
+
+/* ERROR */
+.error-box{background:#FDF2F2;border:2px solid #F5B7B1;border-radius:12px;padding:14px;margin-bottom:14px;font-size:13px;color:#C0392B;}
+
+/* HIDE */
+.hidden{display:none!important;}
+</style>
+</head>
+<body>
+
+<div class="app-header">
+  <h1>🗺️ 家族お出かけアプリ</h1>
+  <div class="weather-bar" id="weather-bar">位置情報を取得中...</div>
+</div>
+
+<div class="main">
+
+  <!-- SETUP -->
+  <div class="setup-card" id="setup-card">
+    <h2>🔍 お出かけ先を探す</h2>
+
+    <!-- 現在地 -->
+    <div class="location-row">
+      <div class="loc-text" id="loc-text">📍 現在地を取得中...</div>
+      <button class="transport-btn" style="width:auto;padding:7px 14px;font-size:12px;border-radius:10px;" onclick="getLocation()">🔄 再取得</button>
+    </div>
+    <!-- 手動入力フォールバック -->
+    <div id="manual-loc-area" style="display:none;margin-top:8px;display:none;">
+      <div style="font-size:12px;color:#888;margin-bottom:6px;">📝 市区町村名で検索（例：渋谷区、横浜市）</div>
+      <div style="display:flex;gap:8px;">
+        <input id="manual-loc-input" type="text" placeholder="例: 横浜市" style="flex:1;padding:9px 12px;border:1.5px solid #CCC;border-radius:10px;font-size:14px;font-family:inherit;">
+        <button onclick="useManualLocation()" style="background:var(--green);color:#fff;border:none;border-radius:10px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">決定</button>
+      </div>
+    </div>
+
+    <!-- 移動手段 -->
+    <div class="section-label">🚗 移動手段</div>
+    <div class="transport-grid">
+      <button class="transport-btn sel" data-t="car"   onclick="selTransport(this)"><span class="ico">🚗</span><span class="lbl">車</span></button>
+      <button class="transport-btn"     data-t="train" onclick="selTransport(this)"><span class="ico">🚃</span><span class="lbl">電車・バス</span></button>
+      <button class="transport-btn"     data-t="bike"  onclick="selTransport(this)"><span class="ico">🚲</span><span class="lbl">自転車</span></button>
+      <button class="transport-btn"     data-t="walk"  onclick="selTransport(this)"><span class="ico">🚶</span><span class="lbl">徒歩</span></button>
+    </div>
+
+    <!-- 移動時間上限 -->
+    <div class="time-row">
+      <label>⏱ 移動時間の上限:</label>
+      <div class="time-chips">
+        <button class="time-chip" data-min="30"  onclick="selTime(this)">30分</button>
+        <button class="time-chip" data-min="60"  onclick="selTime(this)">1時間</button>
+        <button class="time-chip sel" data-min="90" onclick="selTime(this)">1.5時間</button>
+        <button class="time-chip" data-min="120" onclick="selTime(this)">2時間</button>
+      </div>
+    </div>
+
+    <!-- 気分 -->
+    <div class="section-label">🎡 今日の気分・行きたい場所（複数OK）</div>
+    <div class="mood-grid" id="mood-grid">
+      <button class="mood-chip" data-mood="芝生・公園"    onclick="togMood(this)"><span class="ico">🌿</span>芝生・公園</button>
+      <button class="mood-chip" data-mood="遊具"          onclick="togMood(this)"><span class="ico">🎠</span>大きい遊具</button>
+      <button class="mood-chip" data-mood="科学館"        onclick="togMood(this)"><span class="ico">🔬</span>科学館</button>
+      <button class="mood-chip" data-mood="水族館"        onclick="togMood(this)"><span class="ico">🐠</span>水族館</button>
+      <button class="mood-chip" data-mood="動物園"        onclick="togMood(this)"><span class="ico">🦒</span>動物園</button>
+      <button class="mood-chip" data-mood="プール"        onclick="togMood(this)"><span class="ico">🏊</span>プール</button>
+      <button class="mood-chip" data-mood="博物館"        onclick="togMood(this)"><span class="ico">🏛️</span>博物館</button>
+      <button class="mood-chip" data-mood="アスレチック"  onclick="togMood(this)"><span class="ico">🧗</span>アスレチック</button>
+      <button class="mood-chip" data-mood="キャンプ・自然" onclick="togMood(this)"><span class="ico">🏕️</span>キャンプ・自然</button>
+      <button class="mood-chip" data-mood="室内遊び場"   onclick="togMood(this)"><span class="ico">🏠</span>室内遊び場</button>
+    </div>
+
+    <div id="error-msg" class="error-box hidden"></div>
+    <button class="btn-search" id="btn-search" onclick="doSearch()" disabled>
+      <span>🔍</span><span>スポットを探す</span>
+    </button>
+  </div>
+
+  <!-- LOADING -->
+  <div id="loading" class="hidden">
+    <div class="loading">
+      <div class="spinner"></div>
+      <div id="loading-msg">スポットを検索中...</div>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="results" class="hidden">
+    <div class="spots-header">
+      <div class="spots-title" id="results-title">おすすめスポット</div>
+      <button class="btn-redo" onclick="doSearch()">🔄 再検索</button>
+    </div>
+    <div id="spots-list"></div>
+
+    <!-- CHAT -->
+    <div class="chat-section">
+      <h3>💬 AIに相談する</h3>
+      <p style="font-size:12px;color:var(--sub);margin-bottom:12px;">「もっと近い場所がいい」「室内がいい」「雨でも大丈夫な場所は？」など自由に話しかけてください</p>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-input-row">
+        <textarea class="chat-input" id="chat-input" rows="2" placeholder="フィードバックを入力..." onkeydown="chatKeydown(event)"></textarea>
+        <button class="btn-send" id="btn-send" onclick="sendChat()">➤</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ===== STATE =====
+let lat = null, lng = null;
+let transport = 'car';
+let maxTravelMin = 90;
+let moods = [];
+let lastResult = null;
+let chatHistory = [];
+
+// ===== INIT =====
+window.onload = () => {
+  getLocation();
+};
+
+// ===== LOCATION =====
+function getLocation() {
+  const el = document.getElementById('loc-text');
+  el.textContent = '📍 現在地を取得中...';
+  el.className = 'loc-text';
+  if (!navigator.geolocation) {
+    el.textContent = '⚠️ このブラウザでは位置情報が使えません';
+    el.className = 'loc-text err';
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      lat = pos.coords.latitude;
+      lng = pos.coords.longitude;
+      el.textContent = `✅ 位置情報を取得しました（精度: ${Math.round(pos.coords.accuracy)}m）`;
+      el.className = 'loc-text ok';
+      document.getElementById('btn-search').disabled = false;
+      fetchWeather();
+    },
+    err => {
+      el.textContent = `⚠️ GPS取得失敗 — 下の欄に市区町村を入力してください`;
+      el.className = 'loc-text err';
+      document.getElementById('manual-loc-area').style.display = 'block';
+    },
+    { enableHighAccuracy: true, timeout: 12000 }
+  );
+}
+
+// ===== 手動位置入力 =====
+async function useManualLocation() {
+  const query = document.getElementById('manual-loc-input').value.trim();
+  if (!query) return;
+  const el = document.getElementById('loc-text');
+  el.textContent = '🔍 住所を検索中...';
+  el.className = 'loc-text';
+  try {
+    const res = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+    if (data.lat && data.lng) {
+      lat = data.lat;
+      lng = data.lng;
+      el.textContent = `✅ ${data.name || query}`;
+      el.className = 'loc-text ok';
+      document.getElementById('btn-search').disabled = false;
+      document.getElementById('manual-loc-area').style.display = 'none';
+      fetchWeather();
+    } else {
+      el.textContent = `⚠️ 「${query}」が見つかりません。別の書き方で試してください`;
+      el.className = 'loc-text err';
+    }
+  } catch(e) {
+    el.textContent = '⚠️ 検索エラー';
+    el.className = 'loc-text err';
+  }
+}
+
+// ===== WEATHER =====
+async function fetchWeather() {
+  if (!lat || !lng) return;
+  try {
+    const r = await fetch(`/api/weather?lat=${lat}&lng=${lng}`);
+    const w = await r.json();
+    const bar = document.getElementById('weather-bar');
+    const rainIcon = w.is_rainy ? '☔' : (w.code <= 2 ? '☀️' : '⛅');
+    bar.innerHTML = `
+      <span>${rainIcon} ${w.condition}</span>
+      <span>🌡️ ${w.temp}℃（体感${w.feels_like}℃）</span>
+      <span>💨 ${w.wind}m/s</span>
+      ${w.is_rainy ? '<span style="color:#FFD700;font-weight:700;">☔ 雨天なので室内スポットも候補に入ります</span>' : ''}
+    `;
+  } catch (e) {
+    console.warn('天気取得失敗:', e);
+  }
+}
+
+// ===== CONTROLS =====
+function selTransport(btn) {
+  document.querySelectorAll('.transport-btn').forEach(b => b.classList.remove('sel'));
+  btn.classList.add('sel');
+  transport = btn.dataset.t;
+}
+
+function selTime(btn) {
+  document.querySelectorAll('.time-chip').forEach(b => b.classList.remove('sel'));
+  btn.classList.add('sel');
+  maxTravelMin = parseInt(btn.dataset.min);
+}
+
+function togMood(btn) {
+  const m = btn.dataset.mood;
+  btn.classList.toggle('sel');
+  if (moods.includes(m)) {
+    moods = moods.filter(x => x !== m);
+  } else {
+    moods.push(m);
+  }
+}
+
+// ===== SEARCH =====
+async function doSearch() {
+  if (!lat || !lng) { alert('位置情報を取得してください'); return; }
+
+  const errEl = document.getElementById('error-msg');
+  errEl.classList.add('hidden');
+
+  show('loading'); hide('results');
+  document.getElementById('loading-msg').textContent = 'スポットを検索中... (しばらくお待ちください)';
+
+  try {
+    const res = await fetch('/api/spots', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ lat, lng, transport, moods, max_travel_min: maxTravelMin }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    lastResult = data;
+    chatHistory = [];
+    renderResults(data);
+    hide('loading'); show('results');
+
+  } catch (e) {
+    hide('loading');
+    errEl.textContent = '⚠️ エラーが発生しました: ' + e.message;
+    errEl.classList.remove('hidden');
+    show('setup-card');
+  }
+}
+
+// ===== RENDER RESULTS =====
+function renderResults(data) {
+  const { spots, weather, location_name, transport: tp, moods: ms } = data;
+  const transportLabel = { car: '車', train: '電車・バス', bike: '自転車', walk: '徒歩' }[tp] || tp;
+  const moodLabel = ms.length ? ms.join('・') : 'おまかせ';
+
+  document.getElementById('results-title').textContent =
+    `🗺️ ${location_name} 周辺のおすすめ5スポット（${transportLabel}）`;
+
+  const list = document.getElementById('spots-list');
+  list.innerHTML = '';
+
+  spots.forEach((s, i) => {
+    const isAI = s.source === 'ai_fallback';
+    const ratingHtml = s.rating
+      ? `<span class="meta-item"><span class="ico">⭐</span><span class="rating">${s.rating}</span><span style="font-size:11px;color:var(--sub)">(${(s.user_ratings_total||0).toLocaleString()}件)</span></span>`
+      : '';
+    const estBadge = s.travel?.estimated ? '<span class="est-badge">概算</span>' : '';
+    const imgHtml = s.photo_url
+      ? `<img class="spot-img" src="${s.photo_url}" alt="${s.name}" onerror="this.style.display='none'">`
+      : `<div class="spot-img-placeholder">${['🌳','🏛️','🦒','🐠','🔬','🏊','🎡','🏕️'][i % 8]}</div>`;
+    const mapsBtn = s.maps_url
+      ? `<a href="${s.maps_url}" target="_blank" class="btn-maps">🗺️ Google マップで経路を開く</a>`
+      : '';
+
+    list.innerHTML += `
+      <div class="spot-card">
+        ${imgHtml}
+        <div class="spot-body">
+          <div class="spot-name"><span class="spot-num">${i+1}</span>${s.name}${isAI ? '<span class="ai-badge">AI提案</span>' : ''}</div>
+          <div class="spot-address">${s.address || ''}</div>
+          <div class="spot-meta">
+            <span class="meta-item"><span class="ico">🕐</span><span class="travel-time">${s.travel?.text || '不明'}</span>${estBadge}</span>
+            ${ratingHtml}
+            ${s.open_now === false ? '<span class="meta-item" style="color:var(--red)">⚠️ 現在閉館中</span>' : ''}
+            ${s.open_now === true  ? '<span class="meta-item" style="color:var(--green)">✅ 営業中</span>' : ''}
+          </div>
+          <div class="spot-reason">${s.reason || 'おすすめスポットです'}</div>
+          ${mapsBtn}
+        </div>
+      </div>
+    `;
+  });
+
+  // チャット欄リセット
+  document.getElementById('chat-messages').innerHTML = '';
+  addChatMsg('ai', `${location_name}周辺で${moodLabel}の条件に合うスポットを5件見つけました！気になる点や「もっと〇〇な場所がいい」などあれば気軽に聞いてください 😊`);
+}
+
+// ===== CHAT =====
+function chatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+}
+
+async function sendChat() {
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+
+  input.value = '';
+  document.getElementById('btn-send').disabled = true;
+  addChatMsg('user', msg);
+  chatHistory.push({ role: 'user', content: msg });
+
+  const typingEl = addChatMsg('ai', '...');
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: msg,
+        history: chatHistory.slice(-8),
+        context: lastResult,
+      }),
+    });
+    const data = await res.json();
+    const reply = data.reply || data.error || 'エラーが発生しました';
+    typingEl.textContent = reply;
+    chatHistory.push({ role: 'assistant', content: reply });
+  } catch(e) {
+    typingEl.textContent = 'エラーが発生しました: ' + e.message;
+  }
+  document.getElementById('btn-send').disabled = false;
+  input.focus();
+}
+
+function addChatMsg(role, text) {
+  const wrap = document.getElementById('chat-messages');
+  const el = document.createElement('div');
+  el.className = `chat-msg ${role}`;
+  el.textContent = text;
+  wrap.appendChild(el);
+  wrap.scrollTop = wrap.scrollHeight;
+  return el;
+}
+
+// ===== UTILS =====
+function show(id) { document.getElementById(id).classList.remove('hidden'); }
+function hide(id) { document.getElementById(id).classList.add('hidden'); }
+</script>
+</body>
+</html>
