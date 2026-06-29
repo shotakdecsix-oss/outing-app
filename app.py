@@ -57,10 +57,34 @@ TRANSPORT_LABELS = {
 }
 
 # ---------------------------------------------------------------------------
-# 天気キャッシュ (Open-Meteo レートリミット対策)
+# 天気キャッシュ (Open-Meteo レートリミット対策 + コールドスタート対策)
+# ファイルに永続化することでRenderのスリープ後も前回値を再利用
 # ---------------------------------------------------------------------------
-_weather_cache: dict = {}   # (lat2, lng2) -> (timestamp, data)
-WEATHER_CACHE_TTL = 600     # 10分間キャッシュ
+WEATHER_CACHE_FILE = os.path.join(BASE_DIR, "weather_cache.json")
+WEATHER_CACHE_TTL  = 3600   # 1時間キャッシュ（天気は1時間では大きく変わらない）
+WEATHER_STALE_TTL  = 86400  # 429の場合はこの時間（24h）まで古い値を返す
+
+def _load_weather_cache() -> dict:
+    """ファイルからキャッシュをロード（コールドスタート対策）"""
+    if not os.path.exists(WEATHER_CACHE_FILE):
+        return {}
+    try:
+        with open(WEATHER_CACHE_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        return {tuple(float(x) for x in k.split(",")): (v[0], v[1]) for k, v in raw.items()}
+    except Exception as e:
+        print(f"[WARN] weather cache load失敗: {e}")
+        return {}
+
+def _save_weather_cache(cache: dict):
+    try:
+        raw = {f"{k[0]},{k[1]}": [v[0], v[1]] for k, v in cache.items()}
+        with open(WEATHER_CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(raw, f)
+    except Exception as e:
+        print(f"[WARN] weather cache save失敗: {e}")
+
+_weather_cache: dict = _load_weather_cache()
 
 # ---------------------------------------------------------------------------
 # 天気取得 (Open-Meteo — APIキー不要)
@@ -80,9 +104,12 @@ WMO_CODES = {
 def get_weather(lat: float, lng: float) -> dict:
     cache_key = (round(lat, 2), round(lng, 2))
     now = _time_module.time()
+
+    # フレッシュなキャッシュがあればそのまま返す
     if cache_key in _weather_cache:
         ts, cached = _weather_cache[cache_key]
         if now - ts < WEATHER_CACHE_TTL:
+            print(f"[WEATHER] キャッシュヒット (age={int(now-ts)}s)")
             return cached
 
     try:
@@ -115,7 +142,23 @@ def get_weather(lat: float, lng: float) -> dict:
             "is_snowy":    code in (71,73,75,77,85,86),
         }
         _weather_cache[cache_key] = (now, result)
+        _save_weather_cache(_weather_cache)   # ← ファイルに永続化（スリープ対策）
+        print(f"[WEATHER] 取得成功: {result['condition']} {result['temp']}℃")
         return result
+
+    except requests.exceptions.HTTPError as e:
+        # 429 → スタールなキャッシュがあれば返す（24h以内）
+        if e.response is not None and e.response.status_code == 429:
+            if cache_key in _weather_cache:
+                ts, stale = _weather_cache[cache_key]
+                if now - ts < WEATHER_STALE_TTL:
+                    age_min = int((now - ts) / 60)
+                    print(f"[WEATHER] 429 → スタールキャッシュ返却 (age={age_min}分)")
+                    return {**stale, "stale": True}
+        print(f"[WARN] 天気取得HTTPエラー: {e}")
+        return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
+                "precip": 0, "code": 0, "is_rainy": False, "is_snowy": False,
+                "error": str(e)}
     except requests.exceptions.Timeout:
         print(f"[WARN] 天気取得タイムアウト (lat={lat}, lng={lng})")
         return {"temp": 20, "feels_like": 20, "condition": "取得失敗", "wind": 0,
