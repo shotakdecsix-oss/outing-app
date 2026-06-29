@@ -219,11 +219,9 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
         rows = r.json().get("rows", [])
         elem = rows[0]["elements"][0] if rows else {}
         status = elem.get("status")
-        print(f"[TRAVEL] mode={mode} status={status} dest=({dest_lat:.3f},{dest_lng:.3f})")
         if status == "OK":
             dur_text = elem["duration"]["text"]
             dur_val  = elem["duration"]["value"]
-            print(f"[TRAVEL] → {dur_text} ({dur_val//60}分)")
             return {
                 "text":      dur_text,
                 "value":     dur_val,
@@ -231,15 +229,36 @@ def get_travel_time(origin_lat, origin_lng, dest_lat, dest_lng,
                 "estimated": False,
                 "mode":      mode,
             }
-        else:
-            print(f"[TRAVEL] API returned non-OK status: {status}, falling back to estimate")
+        # transit が ZERO_RESULTS なら driving で再取得して1.5倍
+        if mode == "transit" and status == "ZERO_RESULTS":
+            driving_params = {
+                "origins":      f"{origin_lat},{origin_lng}",
+                "destinations": f"{dest_lat},{dest_lng}",
+                "mode":         "driving",
+                "language":     "ja",
+                "key":          GOOGLE_KEY,
+            }
+            dr = requests.get(url, params=driving_params, timeout=8)
+            dr.raise_for_status()
+            dr_rows = dr.json().get("rows", [])
+            dr_elem = dr_rows[0]["elements"][0] if dr_rows else {}
+            if dr_elem.get("status") == "OK":
+                drive_sec = dr_elem["duration"]["value"]
+                transit_sec = int(drive_sec * 1.5)
+                transit_min = transit_sec // 60
+                return {
+                    "text":      f"約{transit_min}分",
+                    "value":     transit_sec,
+                    "distance":  dr_elem["distance"]["text"],
+                    "estimated": True,
+                    "mode":      "transit_estimated",
+                }
     except Exception as e:
         print(f"[WARN] 移動時間取得失敗: {e}")
-    # フォールバック（直線距離による概算）
+    # 最終フォールバック（直線距離による概算）
     dist_km = haversine(origin_lat, origin_lng, dest_lat, dest_lng)
     speed = {"driving": 50, "transit": 25, "bicycling": 15, "walking": 5}.get(mode, 50)
     mins = round(dist_km / speed * 60)
-    print(f"[TRAVEL] fallback: mode={mode} dist={dist_km:.1f}km speed={speed} → {mins}分")
     return {"text": f"約{mins}分", "value": mins * 60, "estimated": True, "mode": mode}
 
 def haversine(lat1, lng1, lat2, lng2) -> float:
@@ -679,6 +698,31 @@ moods の選択肢: {list(MOOD_QUERIES.keys())}"""
         result["generated_at"] = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     return jsonify(result)
 
+
+@app.route("/api/debug-travel")
+def debug_travel():
+    """Transit APIのレスポンスを丸ごと返すデバッグ用エンドポイント"""
+    # 横浜駅 → 八景島シーパラダイス（電車で実在するルート）
+    origin = "35.4658,139.6225"
+    dest   = "35.3879,139.6168"
+    result = {}
+    for mode in ["driving", "transit"]:
+        params = {
+            "origins":      origin,
+            "destinations": dest,
+            "mode":         mode,
+            "language":     "ja",
+            "key":          GOOGLE_KEY,
+        }
+        if mode == "transit":
+            params["departure_time"] = int(_time_module.time())
+        try:
+            r = requests.get("https://maps.googleapis.com/maps/api/distancematrix/json",
+                             params=params, timeout=10)
+            result[mode] = r.json()
+        except Exception as e:
+            result[mode] = {"error": str(e)}
+    return jsonify(result)
 
 if __name__ == "__main__":
     print(f"[お出かけアプリ] http://localhost:{PORT} で起動中")
